@@ -46,8 +46,10 @@ volatile uint8_t LCD_ticker_i = 0;
 /* tablice do przetwarzania wynikow */
 int id_table[N];
 int route_table[N];
-char estimated_table[N][6];
+// char estimated_table[N][6];
+char estimated_table[N];
 int delay_table[N];
+int time_table[N];
 int tram_number;
 
 char auth[] = "04bb63fb1dac49789aaa55901ad59468";	// blynk auth key
@@ -57,7 +59,8 @@ char pass[] = "maslanka";							// pass
 DHT dht(DHTPIN, DHTTYPE); // obiekt dla czujnika dht
 float h;                  // zmienna dla temperatury
 float t;                  // zmienna dla wilgotnoœci
-int PIRout;               // stan pinu czujnika PIR
+bool PIR_out;             // stan pinu czujnika PIR
+bool PIR_flag = false;
 
 /* obiekt wyœwietlacza LCD */
 LiquidCrystal_I2C lcd(I2C_ADDR, En_pin, Rw_pin, Rs_pin, D4_pin, D5_pin, D6_pin, D7_pin);
@@ -69,7 +72,7 @@ void changeState() {
 
 void moveLCD() {
 	LCD_ticker_i++;
-	if (LCD_ticker_i = tram_number) {
+	if (LCD_ticker_i >= tram_number) {
 		LCD_ticker_i = 0;
 	}
 }
@@ -165,12 +168,16 @@ void loop()
 	lcd.print(h);
 	
 	/* odczyt PIR */
-	PIRout = digitalRead(PIRPIN);
-	if (PIRout == 1) {
+	PIR_out = digitalRead(PIRPIN);
+	if (PIR_out == 1 && PIR_flag == false) {
 		pir_led.on();
+		Blynk.virtualWrite(PIN_TERMIN, "Czlowiek!\n");
+		PIR_flag = true;
 	}
-	else {
+	else if (PIR_out == 0 && PIR_flag == true) {
 		pir_led.off();
+		Blynk.virtualWrite(PIN_TERMIN, "Pusto!\n");
+		PIR_flag = false;
 	}
 
 	/* obs³uga tramwajów */
@@ -181,6 +188,7 @@ void loop()
 
 		if (httpCode > 0) {
 			int i = 0;
+			int hour, min, sec;
 			/* Parsing */
 			const size_t bufferSize = JSON_ARRAY_SIZE(11) + JSON_OBJECT_SIZE(2) + 11 * JSON_OBJECT_SIZE(12); // z internetu
 			DynamicJsonBuffer jsonBuffer;                                 // obiekt bufora
@@ -192,29 +200,50 @@ void loop()
 				int routeId = delays["routeId"];                        // numer linii
 				const char* estimatedTime = delays["estimatedTime"];    // oczekiwany czas przyjazdu
 				int delayInSeconds = delays["delayInSeconds"];          // opóŸnienie w sekundach (+ lub -)
+				const char* timeStamp = delays["timestamp"];
 
 				/* Blynk Serial */
-				Blynk.virtualWrite(PIN_TERMIN, routeId);
-				Blynk.virtualWrite(PIN_TERMIN, " bedzie o ");
-				Blynk.virtualWrite(PIN_TERMIN, estimatedTime);
-				Blynk.virtualWrite(PIN_TERMIN, " spozniony ");
-				Blynk.virtualWrite(PIN_TERMIN, delayInSeconds);
-				Blynk.virtualWrite(PIN_TERMIN, " s\n");
+				if (i == 0) {
+					Blynk.virtualWrite(PIN_TERMIN, "Teraz jest ");
+					Blynk.virtualWrite(PIN_TERMIN, timeStamp);
+					Blynk.virtualWrite(PIN_TERMIN, "\n");
+				}
 
 				/* Obs³uga wyników */
 				id_table[i] = id;
 				route_table[i] = routeId;
-				estimated_table[i][0] = *estimatedTime;
+				// estimated_table[i][0] = *estimatedTime;
 				delay_table[i] = delayInSeconds;
+
+				sscanf(estimatedTime, "%d:%d", &hour, &min);
+				time_table[i] = (hour) * 60 + (min);	
+				sscanf(timeStamp, "%d:%d", &hour, &min);
+				time_table[i] = (time_table[i] - ((hour) * 60 + (min)));
+
+				/* wyswietlanie wynikow Blynk */
+
+				Blynk.virtualWrite(PIN_TERMIN, routeId);
+				Blynk.virtualWrite(PIN_TERMIN, " bedzie o ");
+				Blynk.virtualWrite(PIN_TERMIN, estimatedTime);
+				Blynk.virtualWrite(PIN_TERMIN, " (za ");
+				Blynk.virtualWrite(PIN_TERMIN, time_table[i]);
+				Blynk.virtualWrite(PIN_TERMIN, " min)");
+				Blynk.virtualWrite(PIN_TERMIN, " spozniony o ");
+				Blynk.virtualWrite(PIN_TERMIN, delayInSeconds);
+				Blynk.virtualWrite(PIN_TERMIN, " s\n");
+
 
 				/* obliczanie ilosci wpisow */
 				i++;
 				tram_number = i;
 				if (tram_number > N) {
+					Blynk.virtualWrite(PIN_TERMIN, "\nTram_number : ");
+					Blynk.virtualWrite(PIN_TERMIN, tram_number);
+					Blynk.virtualWrite(PIN_TERMIN, "\n");
 					break;
 				}
-				Blynk.virtualWrite(PIN_TERMIN, "-----------------------\n");
 			}
+			Blynk.virtualWrite(PIN_TERMIN, "-----------------------\n");
 		}
 		http.end(); // roz³¹czenie z tramwajem
 
@@ -225,18 +254,60 @@ void loop()
 
 	/* wyswietlanie LCD */
 	lcd.setCursor(0, 1);
-	lcd.print(route_table[LCD_ticker_i]);
-	lcd.print("-");
-	for (int j = 0; j < 6; j++) {
-		lcd.print(estimated_table[LCD_ticker_i + 1][j]);
+	lcd.print(route_table[LCD_ticker_i]); 
+	lcd.print(" za ");
+	if (time_table[LCD_ticker_i] <= 1) {
+		lcd.print("<");
+		lcd.print(time_table[LCD_ticker_i]);
+	}
+	else if (time_table[LCD_ticker_i] < 60) {
+		lcd.print(time_table[LCD_ticker_i]);
+	}
+	else {
+		lcd.print(">");
+		lcd.print("60");
 	}
 	if (tram_number > 1) { // przypadek jednego tramwaju na liscie
-		lcd.print("||");
-		lcd.print(route_table[LCD_ticker_i + 1]);
-		lcd.print("-");
-		for (int j = 0; j < 6; j++) {
-			lcd.print(estimated_table[LCD_ticker_i + 1][j]);
+		if ((LCD_ticker_i + 1) >= tram_number) {
+			lcd.print("|");
+			lcd.print(route_table[0]);
+			lcd.print(" za ");
+			if (time_table[0] <= 1) {
+				lcd.print("<");
+				lcd.print(time_table[0]);
+				lcd.print("   ");
+			}
+			else if (time_table[0] < 60) {
+				lcd.print(time_table[0]);
+				lcd.print("   ");
+			}
+			else {
+				lcd.print(">");
+				lcd.print("60");
+				lcd.print("   ");
+			}
+
 		}
+		else {
+			lcd.print("|");
+			lcd.print(route_table[LCD_ticker_i + 1]);
+			lcd.print(" za ");
+			if (time_table[LCD_ticker_i + 1] <= 1) {
+				lcd.print("<");
+				lcd.print(time_table[LCD_ticker_i + 1]);
+				lcd.print("   ");
+			}
+			else if (time_table[LCD_ticker_i] < 60) {
+				lcd.print(time_table[LCD_ticker_i + 1]);
+				lcd.print("   ");
+			}
+			else {
+				lcd.print(">");
+				lcd.print("60");
+				lcd.print("   ");
+			}
+		}
+
 	}
 	else { // pusto    
 		lcd.print("        ");
