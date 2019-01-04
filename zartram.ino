@@ -38,8 +38,8 @@
 #define D6_pin 6
 #define D7_pin 7
 
-Ticker WiFi_timer;
-Ticker LCD_change;
+Ticker WiFi_timer;	// ticker stanu do odczytu stanu tramwajow
+Ticker LCD_change;	// ticker stanu do przewijania LCD
 volatile uint8_t WiFi_timer_enable = 1;
 volatile uint8_t LCD_ticker_i = 0;
 
@@ -50,9 +50,9 @@ char estimated_table[N][6];
 int delay_table[N];
 int tram_number;
 
-char auth[] = "04bb63fb1dac49789aaa55901ad59468"; // blynk auth key
-char ssid[] = "Maslan_zarembianu";                // wifi
-char pass[] = "maslanka";
+char auth[] = "04bb63fb1dac49789aaa55901ad59468";	// blynk auth key
+char ssid[] = "Maslan_zarembianu";					// wifi
+char pass[] = "maslanka";							// pass
 
 DHT dht(DHTPIN, DHTTYPE); // obiekt dla czujnika dht
 float h;                  // zmienna dla temperatury
@@ -84,6 +84,7 @@ BLYNK_READ(PIN_UPTIME) {
 BLYNK_READ(PIN_HUMINI) {
 	Blynk.virtualWrite(PIN_HUMINI, h);
 }
+/* LED w app Blynk */
 WidgetLED pir_led(PIN_PIRSEN);
 
 /* ³¹czenie i ponowne ³¹czenie blynk */
@@ -97,14 +98,15 @@ bool connectBlynk()
 /* ³¹czenie i ponowne ³¹czenie wifi */
 void connectWiFi()
 {
-	if (pass && strlen(pass)) {
+	if (pass && strlen(pass)) {	// polacz
 		WiFi.begin((char*)ssid, (char*)pass);
 	}
 	else {
 		WiFi.begin((char*)ssid);
 	}
 
-	while (WiFi.status() != WL_CONNECTED) {
+	
+	while (WiFi.status() != WL_CONNECTED) { // czekaj na polaczenie
 		delay(500);
 		digitalWrite(LED_BUILTIN, digitalRead(LED_BUILTIN) ^ 1);
 	}
@@ -146,6 +148,8 @@ void setup()
 	WiFi_timer.attach(60, changeState);
 	LCD_change.attach(3, moveLCD);
 	lcd.print("||START");
+	lcd.clear();
+	lcd.print("ZARTRAM (TM)");
 }
 
 
@@ -154,7 +158,12 @@ void loop()
 	/* pomiar DHT22 */
 	h = dht.readHumidity();
 	t = dht.readTemperature();
-
+	lcd.setCursor(0, 0);
+	lcd.print("T:");
+	lcd.print(t);
+	lcd.print(" W:");
+	lcd.print(h);
+	
 	/* odczyt PIR */
 	PIRout = digitalRead(PIRPIN);
 	if (PIRout == 1) {
@@ -166,7 +175,6 @@ void loop()
 
 	/* obs³uga tramwajów */
 	if ((WiFi.status() == WL_CONNECTED) && (WiFi_timer_enable == 1)) {
-		lcd.clear();
 		HTTPClient http;  // obiekt klienta http
 		http.begin("http://87.98.237.99:88/delays?stopId=2074"); // get st¹d
 		int httpCode = http.GET();
@@ -174,29 +182,32 @@ void loop()
 		if (httpCode > 0) {
 			int i = 0;
 			/* Parsing */
-			const size_t bufferSize = JSON_ARRAY_SIZE(11) + JSON_OBJECT_SIZE(2) + 11 * JSON_OBJECT_SIZE(12);
+			const size_t bufferSize = JSON_ARRAY_SIZE(11) + JSON_OBJECT_SIZE(2) + 11 * JSON_OBJECT_SIZE(12); // z internetu
 			DynamicJsonBuffer jsonBuffer;                                 // obiekt bufora
 			JsonObject& root = jsonBuffer.parseObject(http.getString());  // pobranie ca³ego stringa
 			JsonArray& delay = root["delay"];                             // stworzenie tablicy dla "delay"
 
-			for (auto& delays : delay) {      // dla obiektu w tablicy sprawdŸ
+			for (auto& delays : delay) {								// dla obiektu w tablicy sprawdŸ
 				int id = delays["id"];                                  // parametr id
 				int routeId = delays["routeId"];                        // numer linii
 				const char* estimatedTime = delays["estimatedTime"];    // oczekiwany czas przyjazdu
 				int delayInSeconds = delays["delayInSeconds"];          // opóŸnienie w sekundach (+ lub -)
 
+				/* Blynk Serial */
 				Blynk.virtualWrite(PIN_TERMIN, routeId);
 				Blynk.virtualWrite(PIN_TERMIN, " bedzie o ");
 				Blynk.virtualWrite(PIN_TERMIN, estimatedTime);
 				Blynk.virtualWrite(PIN_TERMIN, " spozniony ");
 				Blynk.virtualWrite(PIN_TERMIN, delayInSeconds);
 				Blynk.virtualWrite(PIN_TERMIN, " s\n");
+
 				/* Obs³uga wyników */
 				id_table[i] = id;
 				route_table[i] = routeId;
 				estimated_table[i][0] = *estimatedTime;
 				delay_table[i] = delayInSeconds;
 
+				/* obliczanie ilosci wpisow */
 				i++;
 				tram_number = i;
 				if (tram_number > N) {
@@ -206,9 +217,10 @@ void loop()
 			}
 		}
 		http.end(); // roz³¹czenie z tramwajem
+
 		/* migniecie dioda co cykl */
 		digitalWrite(LED_BUILTIN, digitalRead(LED_BUILTIN) ^ 1);
-		WiFi_timer_enable = 0;
+		WiFi_timer_enable = 0; // zmiana stanu
 	}
 
 	/* wyswietlanie LCD */
@@ -229,12 +241,6 @@ void loop()
 	else { // pusto    
 		lcd.print("        ");
 	}
-
-	lcd.setCursor(0, 0);
-	lcd.print("T:");
-	lcd.print(t);
-	lcd.print(" W:");
-	lcd.print(h);
 
 	// Reconnect WiFi
 	if (WiFi.status() != WL_CONNECTED) {
